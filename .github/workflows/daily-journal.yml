@@ -227,11 +227,14 @@ jobs:
           if len(lesson) < 200:
               raise RuntimeError("Generated lesson is unexpectedly short.")
 
+
           output_file.write_text(
-              f"# Daily Learning Journal — {today}\n\n"
+              f"# Daily Learning Journey\n\n"
+              f"## {today}\n\n"
               f"{lesson}\n",
               encoding="utf-8"
           )
+
 
           print(f"Generated lesson: {output_file}")
           print(f"Lesson length: {len(lesson)} characters")
