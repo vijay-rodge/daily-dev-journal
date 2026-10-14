@@ -1,138 +1,145 @@
-name: Gemini Daily Developer Journal
+name: Gemini Daily Learning Journal
 
 on:
   schedule:
-    - cron: "30 20 * * *" # Midnight IST daily
+    - cron: "30 20 * * *" # 2:00 AM IST daily
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  daily-journal:
+  daily-learning:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate daily journal with Gemini
+      - name: Generate daily learning lesson
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_USERNAME: vijay-rodge
         run: |
           python - <<'PY'
-          import os, json, urllib.request
-          from datetime import datetime, timedelta, timezone
+          import os
+          import json
+          import urllib.request
+          from datetime import datetime
           from zoneinfo import ZoneInfo
           from pathlib import Path
-
-          username = os.environ["GITHUB_USERNAME"]
-          api_key = os.environ["GEMINI_API_KEY"]
-
-          now = datetime.now(timezone.utc)
-          cutoff = now - timedelta(hours=24)
-
-          def get_json(url, headers=None):
-              req = urllib.request.Request(url, headers=headers or {})
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return json.loads(r.read())
-
-          # Retrieve recent public GitHub activity.
-          url = (
-              f"https://api.github.com/users/{username}/events"
-              "?per_page=100"
-          )
-          events = get_json(url, {
-              "Accept": "application/vnd.github+json",
-              "User-Agent": "daily-dev-journal"
-          })
-
-          recent = []
-          for event in events:
-              created = datetime.fromisoformat(
-                  event["created_at"].replace("Z", "+00:00")
-              )
-              if cutoff <= created <= now:
-                  recent.append({
-                      "type": event["type"],
-                      "repo": event["repo"]["name"],
-                      "created_at": event["created_at"],
-                      "details": event.get("payload", {})
-                  })
 
           today = datetime.now(
               ZoneInfo("Asia/Kolkata")
           ).date().isoformat()
 
-          if recent:
-              prompt = f"""
-              Write a concise developer journal for {today}.
-              Base it ONLY on these observed GitHub events:
-              {json.dumps(recent, ensure_ascii=False)}
+          output_dir = Path("journal")
+          output_dir.mkdir(exist_ok=True)
+          output_file = output_dir / f"{today}.md"
 
-              Include:
-              - Activity summary
-              - Repositories involved
-              - Verified accomplishments
-              - Possible next steps
+          prompt = f"""
+          Create a useful daily computer science learning lesson
+          for {today}.
 
-              Do not invent code changes, learning, or achievements.
-              If evidence is insufficient, explicitly say so.
-              Return Markdown only.
-              """
-              endpoint = (
-                  "https://generativelanguage.googleapis.com/"
-                  "v1beta/models/gemini-2.5-flash:generateContent"
+          This is an educational lesson, not a report of work
+          the user has actually completed.
+
+          Choose one focused topic from:
+          Java, Python, DSA, algorithms, OOP, databases, APIs,
+          Git, GitHub, operating systems, computer networks,
+          cloud computing, AI/ML, or software engineering.
+
+          Aim for variety across days. Avoid repeating the topic
+          in these recent journal files if they exist:
+          {json.dumps([
+              p.stem for p in sorted(output_dir.glob("*.md"))[-14:]
+              if p.name != f"{today}.md"
+          ])}
+
+          Write a Markdown lesson containing:
+          1. A clear title and the topic
+          2. A beginner-friendly explanation
+          3. A correct, runnable code example
+          4. An explanation of how the code works
+          5. A real-world application
+          6. One practice task for the reader
+          7. A short key takeaway
+
+          Prefer Java or Python for the code example.
+          Make the lesson accurate, practical, and self-contained.
+          Do not claim the user has completed or learned the lesson.
+          Return only the Markdown lesson.
+          """
+
+          api_key = os.environ["GEMINI_API_KEY"]
+
+          endpoint = (
+              "https://generativelanguage.googleapis.com/"
+              "v1beta/models/gemini-2.5-flash:generateContent"
+          )
+
+          payload = {
+              "contents": [{
+                  "parts": [{"text": prompt}]
+              }],
+              "generationConfig": {
+                  "temperature": 0.9,
+                  "maxOutputTokens": 1800
+              }
+          }
+
+          request = urllib.request.Request(
+              endpoint,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "x-goog-api-key": api_key
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(
+              request, timeout=90
+          ) as response:
+              result = json.loads(response.read().decode("utf-8"))
+
+          candidates = result.get("candidates", [])
+          if not candidates:
+              raise RuntimeError(
+                  "Gemini returned no lesson. Check API response and quota."
               )
-              body = json.dumps({
-                  "contents": [{
-                      "parts": [{"text": prompt}]
-                  }]
-              }).encode()
 
-              req = urllib.request.Request(
-                  endpoint,
-                  data=body,
-                  headers={
-                      "Content-Type": "application/json",
-                      "x-goog-api-key": api_key
-                  },
-                  method="POST"
-              )
+          parts = candidates[0].get("content", {}).get("parts", [])
+          lesson = "\n".join(
+              part["text"] for part in parts if "text" in part
+          ).strip()
 
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  result = json.loads(r.read())
+          if not lesson:
+              raise RuntimeError("Gemini returned empty lesson content.")
 
-              report = result["candidates"][0]["content"]["parts"][0]["text"]
-          else:
-              report = (
-                  f"# Developer Journal — {today}\n\n"
-                  "No GitHub events were found in the last 24 hours "
-                  "through the public Events API. This does not prove "
-                  "that no work was done.\n"
-              )
+          if len(lesson) < 200:
+              raise RuntimeError("Generated lesson is unexpectedly short.")
 
-          Path("journal").mkdir(exist_ok=True)
-          Path(f"journal/{today}.md").write_text(
-              f"# Developer Journal — {today}\n\n"
-              f"{report}\n\n"
-              "---\n"
-              "Generated from observable GitHub activity.\n",
+          output_file.write_text(
+              f"# Daily Learning Journal — {today}\n\n"
+              f"{lesson}\n",
               encoding="utf-8"
           )
 
-          print(f"Journal generated for {today}")
-          print(f"Recent events found: {len(recent)}")
+          print(f"Generated lesson: {output_file}")
+          print(f"Lesson length: {len(lesson)} characters")
           PY
 
-      - name: Commit and push journal
+      - name: Commit and push daily lesson
         run: |
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add journal/
-          git commit -m "docs: daily developer journal" \
-            || echo "No changes to commit"
-          git push
+
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: daily learning lesson"
+            git push
+          else
+            echo "No changes to commit."
+          fi
