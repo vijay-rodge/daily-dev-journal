@@ -1,178 +1,111 @@
-name: Gemini Daily Learning Journal
 
-on:
-  schedule:
-    - cron: "30 20 * * *" # 2:00 AM IST daily
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  daily-learning:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Generate daily learning lesson
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python - <<'PY'
-          import os
-          import json
-          import urllib.request
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          from pathlib import Path
-
-          today = datetime.now(
-              ZoneInfo("Asia/Kolkata")
-          ).date().isoformat()
-
-          output_dir = Path("journal")
-          output_dir.mkdir(exist_ok=True)
-          output_file = output_dir / f"{today}.md"
-
-          prompt = f"""
-          Create a useful daily computer science learning lesson
-          for {today}.
-
-          This is an educational lesson, not a report of work
-          the user has actually completed.
-
-          Choose one focused topic from:
-          Java, Python, DSA, algorithms, OOP, databases, APIs,
-          Git, GitHub, operating systems, computer networks,
-          cloud computing, AI/ML, or software engineering.
-
-          Aim for variety across days. Avoid repeating the topic
-          in these recent journal files if they exist:
-          {json.dumps([
-              p.stem for p in sorted(output_dir.glob("*.md"))[-14:]
-              if p.name != f"{today}.md"
-          ])}
-
-          Write a Markdown lesson containing:
-          1. A clear title and the topic
-          2. A beginner-friendly explanation
-          3. A correct, runnable code example
-          4. An explanation of how the code works
-          5. A real-world application
-          6. One practice task for the reader
-          7. A short key takeaway
-
-          Prefer Java or Python for the code example.
-          Make the lesson accurate, practical, and self-contained.
-          Do not claim the user has completed or learned the lesson.
-          Return only the Markdown lesson.
-          """
-
-          api_key = os.environ["GEMINI_API_KEY"]
-
-          endpoint = (
-              "https://generativelanguage.googleapis.com/"
-              "v1beta/models/gemini-3.5-flash:generateContent"
-          )
-
-          payload = {
-              "contents": [{
-                  "parts": [{"text": prompt}]
-              }],
-              "generationConfig": {
-                  "temperature": 0.9,
-                  "maxOutputTokens": 1800
-              }
-          }
-
-          request = urllib.request.Request(
-              endpoint,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Content-Type": "application/json",
-                  "x-goog-api-key": api_key
-              },
-              method="POST"
-          )
-
-
+          # Discover models available to this API key.
           import time
           import urllib.error
 
-          result = None
+          headers = {
+              "Content-Type": "application/json",
+              "x-goog-api-key": api_key
+          }
 
-          for attempt in range(4):
-              try:
-                  with urllib.request.urlopen(
-                      request, timeout=90
-                  ) as response:
-                      result = json.loads(
-                          response.read().decode("utf-8")
-                      )
-                  break
-
-              except urllib.error.HTTPError as error:
-                  details = error.read().decode(
-                      "utf-8", errors="replace"
-                  )
-
-                  if error.code in (429, 500, 502, 503, 504) and attempt < 3:
-                      wait = 2 ** (attempt + 1)
-                      print(
-                          f"Gemini returned HTTP {error.code}. "
-                          f"Retrying in {wait} seconds."
-                      )
-                      time.sleep(wait)
-                      continue
-
-                  print(f"Gemini HTTP status: {error.code}")
-                  print(f"Gemini error response: {details}")
-                  raise
-
-          if result is None:
-              raise RuntimeError("Gemini did not return a response.")
-
-
-          candidates = result.get("candidates", [])
-          if not candidates:
-              raise RuntimeError(
-                  "Gemini returned no lesson. Check API response and quota."
-              )
-
-          parts = candidates[0].get("content", {}).get("parts", [])
-          lesson = "\n".join(
-              part["text"] for part in parts if "text" in part
-          ).strip()
-
-          if not lesson:
-              raise RuntimeError("Gemini returned empty lesson content.")
-
-          if len(lesson) < 200:
-              raise RuntimeError("Generated lesson is unexpectedly short.")
-
-          output_file.write_text(
-              f"# Daily Learning Journal — {today}\n\n"
-              f"{lesson}\n",
-              encoding="utf-8"
+          list_request = urllib.request.Request(
+              "https://generativelanguage.googleapis.com/v1beta/models",
+              headers=headers
           )
 
-          print(f"Generated lesson: {output_file}")
-          print(f"Lesson length: {len(lesson)} characters")
-          PY
+          with urllib.request.urlopen(
+              list_request, timeout=30
+          ) as response:
+              available = json.loads(response.read().decode("utf-8"))
 
-      - name: Commit and push daily lesson
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          models = [
+              model["name"].removeprefix("models/")
+              for model in available.get("models", [])
+              if "generateContent" in model.get(
+                  "supportedGenerationMethods", []
+              )
+          ]
 
-          git add journal/
+          # Prefer Flash models for this short daily lesson.
+          models = sorted(
+              models,
+              key=lambda name: (
+                  "flash" not in name.lower(),
+                  "preview" in name.lower(),
+                  name
+              )
+          )
 
-          if ! git diff --cached --quiet; then
-            git commit -m "docs: daily learning lesson"
-            git push
-          else
-            echo "No changes to commit."
-          fi
+          if not models:
+              raise RuntimeError(
+                  "No models supporting generateContent were found."
+              )
+
+          result = None
+          last_error = None
+
+          for model in models:
+              endpoint = (
+                  "https://generativelanguage.googleapis.com/"
+                  f"v1beta/models/{model}:generateContent"
+              )
+
+              request = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers=headers,
+                  method="POST"
+              )
+
+              print(f"Trying available model: {model}")
+
+              for attempt in range(2):
+                  try:
+                      with urllib.request.urlopen(
+                          request, timeout=90
+                      ) as response:
+                          result = json.loads(
+                              response.read().decode("utf-8")
+                          )
+                      break
+
+                  except urllib.error.HTTPError as error:
+                      details = error.read().decode(
+                          "utf-8", errors="replace"
+                      )
+                      last_error = (
+                          f"Model {model}: HTTP {error.code}: {details}"
+                      )
+
+                      if error.code in (429, 500, 502, 503, 504):
+                          if attempt == 0:
+                              print(
+                                  f"Temporary error on {model}; "
+                                  "retrying in 3 seconds."
+                              )
+                              time.sleep(3)
+                              continue
+
+                          print(
+                              f"Model {model} unavailable; "
+                              "trying another model."
+                          )
+                          break
+
+                      if error.code in (400, 404):
+                          print(
+                              f"Model {model} rejected the request; "
+                              "trying another model."
+                          )
+                          break
+
+                      raise RuntimeError(last_error) from error
+
+              if result is not None:
+                  print(f"Successful model: {model}")
+                  break
+
+          if result is None:
+              raise RuntimeError(
+                  "All available models failed. " + str(last_error)
+              )
