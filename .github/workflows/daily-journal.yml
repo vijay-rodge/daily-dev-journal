@@ -97,10 +97,43 @@ jobs:
               method="POST"
           )
 
-          with urllib.request.urlopen(
-              request, timeout=90
-          ) as response:
-              result = json.loads(response.read().decode("utf-8"))
+
+          import time
+          import urllib.error
+
+          result = None
+
+          for attempt in range(4):
+              try:
+                  with urllib.request.urlopen(
+                      request, timeout=90
+                  ) as response:
+                      result = json.loads(
+                          response.read().decode("utf-8")
+                      )
+                  break
+
+              except urllib.error.HTTPError as error:
+                  details = error.read().decode(
+                      "utf-8", errors="replace"
+                  )
+
+                  if error.code in (429, 500, 502, 503, 504) and attempt < 3:
+                      wait = 2 ** (attempt + 1)
+                      print(
+                          f"Gemini returned HTTP {error.code}. "
+                          f"Retrying in {wait} seconds."
+                      )
+                      time.sleep(wait)
+                      continue
+
+                  print(f"Gemini HTTP status: {error.code}")
+                  print(f"Gemini error response: {details}")
+                  raise
+
+          if result is None:
+              raise RuntimeError("Gemini did not return a response.")
+
 
           candidates = result.get("candidates", [])
           if not candidates:
