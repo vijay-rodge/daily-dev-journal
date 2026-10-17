@@ -3,7 +3,7 @@ name: Gemini Daily Learning Journal
 
 on:
   schedule:
-    - cron: "9 12 * * *" # 6:00 PM IST daily
+    - cron: "24 12 * * *" # 6:00 PM IST daily
   workflow_dispatch:
 
 permissions:
